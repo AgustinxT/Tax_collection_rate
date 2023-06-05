@@ -1,0 +1,365 @@
+---
+title: "Google Data Analytics Portfolio - Case of study - Rural Property Tax"
+author: "Agustin Talavera"
+date: "2023-05-29"
+output:
+  html_document:
+    theme: cerulean
+    toc: true
+    number_sections: true
+---
+
+## **Scenario**
+
+The organization responsible for tax collection wishes to conduct an analysis of the collectability of the "Rural Property Tax" in a hypothetical province of the Argentine Republic for the year 2020, identifying the most relevant aspects that explain it.
+
+The findings resulting from this study could be of great help in segmenting taxpayers according to different criteria, and thus evaluating possible promotions for each group in order to improve the collectability ratio of the aforementioned tax. For practical purposes, the acronym "ICR" will be used to refer to the "Income Collection Rate."
+
+To present the analysis in a methodical and organized manner, the six steps of the data analysis process (ask, prepare, process, analyze, share, act) will be used as a guide.
+
+## **Ask**
+
+An integrated analysis of the rural real estate tax must be conducted to diagnose and, if possible, improve its collectability.
+
+Stakeholders:
+
+Primary:
+
+-   Minister of Economy of the province.
+-   Executive members of the fiscal intelligence department of the organization.
+
+Secondary:
+
+-   Fiscal intelligence team of the agency.
+
+## **Prepare**
+
+The datasets contain information from 15,300 taxpayers. On one hand, there is the accrued amount, and on the other hand, the paid amount. Additionally, the data is divided into installments, as some taxpayers had the option to pay their debt in a single payment with a 10% discount, while others chose to pay in installments (with a maximum of four installments).
+
+Data source: <https://www.kaggle.com/datasets/agustintalavera/rural-property-tax-simulation>
+
+To ensure data integrity, the "ROCCC" approach is followed:
+
+-   Reliability: The data comes from real taxpayers whose IDs and addresses have been encoded.
+-   Originality: The information comes from a primary and original source.
+-   Comprehensive: It contains all the necessary data to find a solution to the task.
+-   Current: The data corresponds to the year 2020. While this criterion is not fully met, it does not affect the objectives of the analysis.
+-   Cited: Unknown.
+
+## **Process**
+
+Firstly, the following R libraries are chosen, which will be used for data import, cleaning, analysis, and presentation in interactive graphs and tables:
+
+```{r setup, include=TRUE, message= FALSE ,warning=FALSE}
+library(readr) # to import csv
+library(tidyverse) #data wrangling
+library(data.table) #similar to tidyverse but faster
+library(dplyr) # data cleaning
+library(ggplot2) # high-quality visualizations
+library(kableExtra) # tabular data presentation
+library(knitr) # to combine with kableExtra to further customization
+
+```
+
+Secondly, we import the data and observe the columns of each table. It can be observed that there are 3 common columns: "CUIT", "Partida.Inmobiliaria", "NUMERO_CUOTA", so a full join will be performed between both tables to start working.
+
+```{r, include= TRUE, warning=FALSE }
+#import datasets
+accrued= read.csv2("Devengado 2020 x cuota.csv") # devengado = accrued
+paid= read.csv2("Pago IR 2020 x cuota.csv") #paid = pagado
+
+tibble_accr =  as.tibble(accrued) %>% 
+  print()
+
+tibble_p =  as.tibble(paid) %>% 
+  print()
+
+paid_accrued= full_join(accrued, paid, by= c("CUIT", "Partida.Inmobiliaria","NUMERO_CUOTA"))#merge
+
+```
+
+Thirdly, the database is cleaned in a few steps:
+
+-   Convert the data into a data table due to the advantages of this package over tidyverse.
+-   Convert headers to lowercase.
+-   Remove NA values.
+-   Convert the variable "numero_cuota" to categorical.
+-   Correct the number format to be recognized as numeric.
+
+Finally, the exempt individuals (taxpayers not obligated by law to pay the tax) are filtered out, and a new dataset is created containing the desired columns.
+
+```{r, include=TRUE,  warning=FALSE }
+# Cleaning - Limpieza
+
+paid_accrued <- as.data.table(paid_accrued) # data table format
+paid_accrued <- paid_accrued %>%
+  setnames(tolower(names(.))) %>%  # lower case
+  na.omit(.) %>% #delete NAs
+  .[, numero_cuota:= as.character(numero_cuota)] # turn number into character to further analysis
+
+# to delete every ".", then replace every "," for "." due to the format "1.152,56" for numbers.
+cols_to_convert= c("devengado","pagos_cap_anio_d", "tpagos_anio_d")
+# step 1
+for (col in cols_to_convert) {
+  paid_accrued[, (col) := gsub("\\.", "" ,get(col))] 
+} 
+#step 2
+for (col in cols_to_convert) {
+  paid_accrued[, (col) := as.numeric(gsub("\\,", "." ,get(col)))] 
+} 
+
+paid_accrued[, pagos_cap_anio_d:= ifelse(is.na(pagos_cap_anio_d)==TRUE, 0 ,pagos_cap_anio_d) ] 
+
+# Order columns and exclude exentos = yes and tpagos_anio_d
+paid_accrued_final= paid_accrued[exenta=="NO", .(cuit,partida.inmobiliaria,minimo,exenta,numero_cuota,devengado,pagos_cap_anio_d)]
+
+
+
+```
+
+## **Analyze and Share**
+
+The analysis is divided by addresses, installments, and collectability categories.
+
+### **General metrics**
+
+-   The collectability rate of the tax is 71.61%.
+-   There are 26,386 addresses and 15,300 taxpayers.
+
+```{r, echo=TRUE ,include=TRUE,  message=FALSE}
+# creating metrics
+# group by addrema
+paid_accrued_final[, accrued_addrema := sum(devengado), by= partida.inmobiliaria]
+paid_accrued_final[, paid_addrema := sum(pagos_cap_anio_d), by= partida.inmobiliaria]
+
+# This table is useful to work the distribution.
+pre_summary_add= unique(paid_accrued_final[, .(partida.inmobiliaria,
+                                               cuit,
+                                               accrued_addrema,
+                                               paid_addrema )]) # filter and delete duplicates.
+# Final result by addrema.
+pre_summary_add[,`:=` (Quantity_addremas=nrow(pre_summary_add),
+                                ICR= NA,
+                                Tax_payers= uniqueN(cuit),
+                                Accrued= sum(accrued_addrema),
+                                Paid= sum(paid_addrema)) ]
+
+summary_tab_add= unique(pre_summary_add[, -c(1:4)])
+summary_tab_add[, ICR:= round(Paid/Accrued *100,2)]
+summary_tab_add$ICR = sprintf("%.2f%%", summary_tab_add$ICR)
+
+summary_tab_add= format(summary_tab_add, big.mark= ",", scientifc= FALSE)
+
+
+
+kbl(summary_tab_add, align='llcc', caption = "<h2 style='text-align:center;'><strong>Income Collection Rate</strong>" ) %>%
+  kable_paper() %>% 
+  kable_classic() %>%
+  kable_styling(c("striped", "hover","condensed"), full_width = T, position = "float_left") %>% 
+  row_spec(0, bold = T, color = "white", background = "#D47AE8")
+```
+
+### **Pareto 80 - 20** 
+
+-   Nearly 91% of the total accrued amount comes from the top 20% of the highest contributors.
+-   The collectability rate for each group (Top 20% and remaining 80%) represents 73% and nearly 58%, respectively.
+
+```{r, echo=TRUE ,include=TRUE,  message=FALSE}
+total_income= mean(pre_summary_add$Accrued)
+total_paid= mean(pre_summary_add$Paid)
+# In order to make a Paretto 80-20
+setorder(pre_summary_add,-accrued_addrema)
+# Determine cutoff for top 20% of IDs based on tax accrued
+cutoff <- ceiling(0.2 * nrow(pre_summary_add))
+
+# Subset data.table to include IDs above cutoff
+top_20_percent <- pre_summary_add[1:cutoff, ]
+
+# Calculate total income for the selected IDs
+top_20_percent_income <- sum(top_20_percent$accrued_addrema)
+
+# Compute percentage of income represented by the top 20% of IDs
+percentage_of_income <- round((top_20_percent_income / total_income) * 100, 2)
+
+#Top 20% Collection Rate is about 73% 
+IR_top= round(sum(top_20_percent$paid_addrema)/sum(top_20_percent$accrued_addrema)*100,2)
+# Remaining values
+min_top20= min(top_20_percent$accrued_addrema) # This value separates the distribution in 80 - 20
+# Remaining 80% Collection Rate is about 58% 
+cutoff_remaining = pre_summary_add[accrued_addrema < min_top20,] 
+IR_remaining= round(sum(cutoff_remaining$paid_addrema)/sum(cutoff_remaining$accrued_addrema)*100,2)
+
+# To see Pareto 80 20 by accrued. 
+# Top 20% explains almost 91% of the total income.
+analysis_results <- data.frame(Category = c("Top 20%", "Remaining 80%"),
+                              Percentage = c(percentage_of_income, 100 - percentage_of_income))
+
+analysis_results$Percentage = sprintf("%.2f%%", analysis_results$Percentage) # to present the result in percentage format and two decimal places
+
+ggplot(analysis_results, aes(x = Category, y = Percentage, fill = Category)) +
+  geom_bar(stat = "identity", width = 0.5, fill= "lightblue") +
+  labs(x = "Category", y = "Percentage of Income", title = "Accrued amount explained by Top 20% IDs") +
+  geom_text(aes(label = Percentage), vjust = -0.5, color = "black", size = 4) +
+  theme_minimal()
+
+# To see how is the Collection rate for each group (20 highest and 80 remaining)
+paid_results= data.table(Category= c("Top 20%", "Remaining 80%"),
+                         Paid_percentage= c(IR_top, IR_remaining))
+
+paid_results$Paid_percentage = sprintf("%.2f%%", paid_results$Paid_percentage)
+
+ggplot(paid_results, aes(x = Category, y = Paid_percentage, fill = Category)) +
+  geom_bar(stat = "identity", width = 0.5, fill= "lightblue") +
+  labs(x = "Category", y = "Paid Percentage", title = "ICR by group") +
+  geom_text(aes(label = Paid_percentage), vjust = -0.5, color = "black", size = 4) +
+  theme_minimal()
+
+
+
+```
+
+### **Metrics by installments**
+
+-   It is evident that there is a relationship between the number of installments chosen and collectability. 23% of the accrued amount in installment 0 (with prompt payment discount) has the highest collection rate (85%). In other words, the discount is generally accepted by taxpayers.
+
+-   The more the payment of the tax is deferred over time, the lower the collectability rate.
+
+```{r, echo=TRUE ,include=TRUE,  message=FALSE}
+
+paid_accrued_final[,`:=` (accrued_share= sum(devengado), 
+                          paid_share= sum(pagos_cap_anio_d)), by= numero_cuota]
+
+summary_share= unique(paid_accrued_final[, .("Share_type"=numero_cuota,
+                                             "ICR_type"= NA, 
+                                                 "Accrued"=accrued_share,
+                                             "%_Accrued"= NA,
+                                                 "Paid"=paid_share,
+                                             "%_Paid"= NA)])# filter and delete duplicates.
+
+
+
+summary_share[,`:=` (ICR_type = round(Paid/Accrued *100,2),
+                     "%_Accrued"= round(Accrued/total_income*100,2),
+                     "%_Paid"=round(Paid/total_paid*100,2))]
+
+
+
+setorder(summary_share,-ICR_type)
+summary_share= format(summary_share, big.mark= ",", scientifc= FALSE)
+summary_share= as.data.table(summary_share) 
+
+kbl(summary_share, align='llcc', caption = "<h2 style='text-align:center;'><strong>ICR by Share type</strong>" ) %>%
+  kable_paper() %>% 
+  kable_classic() %>%
+  kable_styling(c("striped", "hover","condensed"), full_width = T, position = "float_left") %>% 
+  row_spec(0, bold = T, color = "white", background = "#D47AE8")
+
+
+summary_share$ICR_type <- as.numeric(as.character(summary_share$ICR_type))
+
+ggplot(summary_share, aes(x = factor(Share_type), y = ICR_type)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(x = "Share type", y = "Collection Rate in %", title = "Collection Rate by Share type") +
+  theme_minimal() +
+  ylim(0, 100)
+
+
+```
+
+### **Metrics by ID and categories**
+
+-   The category with the highest collectability rate encompasses over half of the taxpayers, accounting for 68% of the total accrued amount and 90% of the overall collection.
+
+-   The last category not only has a very high level of uncollectability but also includes 41% of all taxpayers, explaining 21% of the total accrued amount.
+
+```{r, echo=TRUE ,include=TRUE,  message=FALSE}
+# metrics by ID and category: 
+paid_accrued_final[, accrued_id := sum(devengado), by= cuit]
+paid_accrued_final[, paid_id := sum(pagos_cap_anio_d), by= cuit]
+paid_accrued_final[, icr_id := paid_id/accrued_id, by= cuit]
+# ICR by quartiles
+paid_accrued_final[,category := case_when(icr_id<=0.25 ~ "0% to 25%", 
+                                          icr_id>0.25 & icr_id<=0.5 ~ "25% to 50%",
+                                          icr_id>0.5 & icr_id<=0.75 ~ "50% to 75%",
+                                          icr_id>0.75 ~ "75% to 100%")]
+
+
+presummary_icr_id= unique(paid_accrued_final[, .(cuit,
+                                               accrued_id, 
+                                               paid_id, 
+                                               icr_id, 
+                                               category)]) %>%
+  . [, icr_id:= ifelse(icr_id>1, icr_id==1, icr_id)] %>% # If IR > 1, means that the taxpayers payed his debt with interests.
+  setorder(.,-icr_id)  #descending order
+  
+presummary_icr_id[,`:=` (Accrued= sum(accrued_id),
+                         Paid= sum(paid_id),
+                         ICR=round(mean(icr_id)*100,2),
+                         Tax_payers = uniqueN(cuit)), #amount of IDs
+                  by= category]  
+
+summary_cat= unique(presummary_icr_id[, .(Category= category, 
+                                          Tax_payers,
+                                          "Tax_payers_%"=NA,
+                                          ICR,
+                                          Accrued,
+                                          "Accrued_%"= NA, 
+                                          Paid,
+                                          "Paid_%"=NA)]) # to set column orders
+
+total_tax_payers= sum(summary_cat$Tax_payers)
+
+
+summary_cat %>% 
+  .[,`:=`("Accrued_%"=round(Accrued/total_income*100,2),
+          "Tax_payers_%"=round(Tax_payers/total_tax_payers*100,2),
+          "Paid_%"=round(Paid/total_paid*100,2) ) ] %>% 
+  setorder(., -ICR) 
+  
+summary_cat=format(summary_cat, big.mark= ",", scientific = FALSE) #separate thousands with ","
+  
+ # Summary Table
+kbl(summary_cat, align='llcc', caption = "<h2 style='text-align:center;'><strong>Main information by ICR's category </strong>" ) %>%
+  kable_paper() %>% 
+  kable_classic() %>%
+  kable_styling(c("striped", "hover","condensed"), full_width = T, position = "float_left") %>% 
+  row_spec(0, bold = T, color = "white", background = "#D47AE8")
+
+```
+
+
+```{r, echo=TRUE, include=TRUE,  message=FALSE}
+# ICR quartiles's percentage that belong to the highest 20% or remaining 80% from Pareto analysis.
+
+setorder(presummary_icr_id,-accrued_id)
+# Determine cutoff for top 20% of IDs based on tax accrued
+cutoff <- ceiling(0.2 * nrow(presummary_icr_id))
+
+sep_range= presummary_icr_id[cutoff, accrued_id ] #value from the element 3060 that separates top 20% and remaining 80%
+presummary_icr_id %>% .[,Pareto:= ifelse(accrued_id >= sep_range, "Top 20%", "Remaining 80%")] %>%
+  .[,Tax_payers_cp:= uniqueN(cuit), by= .(category,Pareto)] # tax payers by category and Pareto
+
+setorder(presummary_icr_id, category)
+
+ggplot(presummary_icr_id, mapping= aes(x= Pareto, y=Tax_payers_cp, fill= category) ) + 
+  geom_bar(stat= "identity" ,position = "dodge", width = 0.9) + 
+  labs(x = "Pareto Category", y = "Tax payers count", title = "Observations by Pareto Category", fill= "ICR Category") +
+  geom_text(aes(label = Tax_payers_cp), color = "black", size = 3, position = position_dodge(width = 0.9), vjust = -0.5) +
+  theme_minimal()
+
+
+```
+
+## **Act**
+
+Key findings:
+
+-   The collectability level of the tax is 71%, but it is distributed very asymmetrically among the collectability quartiles and the top 20% of highest contributors.
+
+-   Focusing on the top 20% of highest contributors, who have a collectability rate of 73%, could be highly beneficial as each percentage increase will have a more than proportional impact on the overall collectability due to the representation of this group in the total.
+
+-   There is a significant difference in collectability as the number of installments for debt repayment increases. Providing a higher discount and/or increasing the number of installments for debt repayment could be considered.
+
+-   Slightly increasing the collectability among the 6,300 lowest-paying taxpayers (less than 25%) through incentive or punitive policies could have significant effects on the total amount accrued. This group comprises 41% of taxpayers, explaining 21% of the total accrued amount, and has a very low collectability rate.
+
+-   Lastly, there are 908 taxpayers (almost 6% of the total) who belong to the top 20% group of highest contributors but have a very low collectability rate. Focusing on improving the collectability of this group could have a highly positive impact on revenue.
